@@ -1,0 +1,31 @@
+# Redis Stack bundles the RedisTimeSeries module used by the tick store.
+#   docker compose -f docker/docker-compose.yml up -d
+#   RedisInsight UI: http://localhost:8001
+services:
+  redis:
+    image: redis/redis-stack:7.4.0-v1
+    container_name: mds-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    environment:
+      # Append-only file so ingested ticks survive a container restart.
+      REDIS_ARGS: "--appendonly yes --appendfsync everysec --save ''"
+    volumes:
+      - mds-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  # Vanilla Redis (no modules) - exercises the sorted-set fallback path.
+  redis-vanilla:
+    image: redis:7.4-alpine
+    container_name: mds-redis-vanilla
+    ports:
+      - "6380:6379"
+    profiles: ["fallback"]
+
+volumes:
+  mds-redis-data:

@@ -1,0 +1,3 @@
+# Optional extras. The tooling itself is stdlib-only.
+pandas>=2.0        # analysis.to_dataframe
+matplotlib>=3.7    # analyze_backtest.py --plot

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, cxx: g++,     sanitize: "" }
+          - { os: ubuntu-24.04, cxx: clang++, sanitize: "" }
+          - { os: ubuntu-24.04, cxx: clang++, sanitize: "address" }
+          - { os: ubuntu-24.04, cxx: clang++, sanitize: "thread" }
+          - { os: macos-14,     cxx: clang++, sanitize: "" }
+          - { os: windows-2022, cxx: "",      sanitize: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ -n "${{ matrix.cxx }}" ]; then EXTRA="-DCMAKE_CXX_COMPILER=${{ matrix.cxx }}"; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DMDS_SANITIZE="${{ matrix.sanitize }}" $EXTRA
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Smoke-run apps
+        if: matrix.sanitize == ''
+        shell: bash
+        run: |
+          BIN=build; [ -d build/Release ] && BIN=build/Release
+          $BIN/mds_sim --events 200000 --queue both
+          $BIN/mds_backtest --strategy mm --events 200000
+          $BIN/bench_queue --messages 2000000 --events 200000 --reps 3
+
+  redis-integration:
+    runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis/redis-stack-server:7.4.0-v1
+        ports: ["6379:6379"]
+      vanilla:
+        image: redis:7.4-alpine
+        ports: ["6380:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
+      - name: RedisTimeSeries path
+        run: |
+          ./build/mds_sim --events 300000 --queue spsc --redis 127.0.0.1:6379 --purge
+          ./build/mds_query --redis 127.0.0.1:6379 --field mid --agg avg --bucket-ms 1000
+          ./build/mds_backtest --strategy mm --redis 127.0.0.1:6379
+      - name: Sorted-set fallback path
+        run: |
+          ./build/mds_sim --events 100000 --queue spsc --redis 127.0.0.1:6380 --purge
+          ./build/mds_query --redis 127.0.0.1:6380 --field mid --agg max --bucket-ms 500
+          ./build/mds_backtest --strategy obi --redis 127.0.0.1:6380
+      - name: Python tooling against live Redis
+        run: |
+          (cd python && python3 -m unittest discover -s tests)
+          python3 python/scripts/redis_inspect.py --redis 127.0.0.1:6379 --symbol SIM
+
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: cd python && python -m unittest discover -s tests -v
+      - name: End-to-end against the in-repo fake Redis (no server needed)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMDS_BUILD_BENCH=OFF && cmake --build build --parallel
+          python python/scripts/fake_redis.py --port 6399 &
+          sleep 1
+          ./build/mds_sim --events 50000 --queue spsc --redis 127.0.0.1:6399
+          ./build/mds_query --redis 127.0.0.1:6399 --field mid --agg avg --bucket-ms 100
+          ./build/mds_backtest --strategy mm --redis 127.0.0.1:6399
