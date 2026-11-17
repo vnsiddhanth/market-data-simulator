@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0
+
+- **Web app**: live market dashboard (order book ladder, price chart with strategy fills, trade tape, latency, live PnL), Simulate / Backtest / Benchmarks / History / About pages, presets and inline explanations, light/dark themes, mobile layout.
+- **`mds_live`**: real-time engine pacing the synthetic exchange to the wall clock through the SPSC ring, with live paper trading and JSON Lines snapshots.
+- **Backend** (`web/mds_web`, stdlib only): validated job API with worker pool, persistence, cancellation and downloads; live market manager with SSE fan-out, auto-restart and pause-during-benchmarks; optional access token; strict CSP and security headers.
+- Backtester incremental API (`begin` / `step` / `finish`) and bounded-memory live mode.
+- `--json` outputs for `mds_sim`, `bench_queue` and `bench_orderbook`.
+- Production `Dockerfile`, `compose.yaml` (with Redis Stack), `render.yaml`, `fly.toml`; CI builds and smoke-tests the container.
+
 ## 1.1.0
 
 - Synthetic feed: informed takers (trade with the next fair-value innovation) and permanent price impact on deliberate aggressors; defaults changed to 2 000 events/s and 1.5 ticks/sqrt(s). Market making is no longer risk-free in simulation.

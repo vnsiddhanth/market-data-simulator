@@ -4,22 +4,39 @@
 
 **C++17 · lock-free multi-threading · limit order book · event-driven backtesting · Redis time-series · Python tooling**
 
-A self-contained market microstructure lab. It generates realistic exchange
-order flow, moves it across threads through a wait-free single-producer /
-single-consumer ring buffer, rebuilds a price-time-priority limit order book,
-persists both analytics series and a lossless event log to Redis, and replays
+A self-contained market microstructure lab **with a real-time web app**. It
+generates realistic exchange order flow, moves it across threads through a
+wait-free single-producer / single-consumer ring buffer, rebuilds a
+price-time-priority limit order book, lets strategies paper-trade against it
+live, persists analytics series and a lossless event log to Redis, and replays
 it all through an event-driven backtester whose fill model tracks FIFO queue
 position exactly.
 
+![Live market dashboard](docs/images/live-market.jpg)
+
+## Try it in one command
+
+```bash
+docker build -t mds-web . && docker run --rm -p 8080:8080 mds-web
+```
+
+Open **http://localhost:8080**. The live market starts immediately. From
+the browser you can also run simulations, backtests and benchmarks, browse
+their history and download every output. See [docs/WEB_APP.md](docs/WEB_APP.md)
+for a tour and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) to host it (Docker
+Compose with Redis, Render, Fly.io, any container platform or a VM).
+
 > **New here?** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) explains what
 > the app does in plain language, every input and output, and step-by-step
-> setup for Windows (WSL), Linux and macOS. The fastest way to see it working:
+> setup for Windows (WSL), Linux and macOS. Without Docker:
 >
 > ```bash
 > git clone https://github.com/vnsiddhanth/market-data-simulator.git && cd market-data-simulator
 > cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
-> ./demo.sh
+> cd web && python3 -m mds_web          # web app on http://127.0.0.1:8080
 > ```
+>
+> or `./demo.sh` for a command-line tour.
 
 ```
  SyntheticFeed ──► SpscRing<Envelope> ──► OrderBook ──► TickStore ──► Redis
@@ -37,6 +54,7 @@ position exactly.
 | **Lock-free pipeline** ([docs](docs/LOCK_FREE_PIPELINE.md)) | Wait-free SPSC ring: one acquire-load + one release-store per message, **no CAS / no lock prefix**, producer & consumer state on separate cache lines (+ adjacent-line prefetch padding), **cached remote indices**, batch publish; same pipeline templated over a mutex queue for a like-for-like benchmark |
 | **Backtester** ([docs](docs/BACKTESTING.md)) | Event-driven, order-entry latency, **exact queue-position tracking** (uses each resting order's arrival sequence to know which cancels were ahead of you), trade-through fills, maker rebates / taker fees, Sharpe / Sortino / drawdown, two reference strategies |
 | **Redis storage** ([docs](docs/REDIS_STORAGE.md)) | Dependency-free RESP2 client with pipelining, RedisTimeSeries series with labels + `DUPLICATE_POLICY`, server-side `AGGREGATION` bars, **lossless 40-byte binary event chunks** for exact replay, automatic **sorted-set fallback** on vanilla Redis, Cluster-safe `{hash-tag}` keys |
+| **Web app** ([docs](docs/WEB_APP.md)) | Real-time engine `mds_live` (wall-clock-paced feed → SPSC ring → book + live paper trading) streamed to browsers over Server-Sent Events; stdlib-only Python backend with a validated job API, history and downloads; dependency-free frontend with canvas charts; one Docker image, health checks, optional access token, strict CSP |
 | **Python** ([docs](python/README.md)) | Stdlib-only RESP client, byte-compatible event codec, reference order book, backtest analytics (mark-outs, cross-check of C++ metrics), an **in-repo fake Redis server** so the whole Redis path is testable without a server |
 
 ---
@@ -175,11 +193,15 @@ include/mds/
   strategies/    InventoryMarketMaker, ImbalanceTaker
   storage/       RESP codec, RedisClient, TickStore
 src/             implementations
-apps/            mds_sim, mds_backtest, mds_query
+apps/            mds_sim, mds_backtest, mds_query, mds_live (real-time engine)
 bench/           bench_queue, bench_orderbook
 tests/           C++ unit / property / concurrency tests (self-contained framework)
 python/mds/      codec, resp, store, book, analysis
 python/scripts/  fake_redis, ingest_events, redis_inspect, verify_events, analyze_backtest, run_benchmarks
+web/mds_web/     web backend: HTTP API, job runner, live SSE stream (stdlib only)
+web/frontend/    single-page app: live dashboard, simulate, backtest, benchmarks, history
+web/tests/       backend end-to-end tests
+Dockerfile       production image (engines + backend + frontend); compose.yaml adds Redis
 docs/            getting started, architecture and technical notes
 demo.sh          end-to-end demo (simulate -> Redis -> backtest -> analyse)
 docker/          Redis Stack compose file, reproducible build image
@@ -189,6 +211,8 @@ docker/          Redis Stack compose file, reproducible build image
 
 | Document | Contents |
 |---|---|
+| [WEB_APP.md](docs/WEB_APP.md) | The web app: pages, how the real-time stream works, REST/SSE API |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker, Compose with Redis, Render, Fly.io, VMs, configuration, security, operations |
 | [GETTING_STARTED.md](docs/GETTING_STARTED.md) | What the app is, inputs and outputs, step-by-step setup and usage, troubleshooting |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System overview, threading model, data flow, component contracts |
 | [ORDER_BOOK.md](docs/ORDER_BOOK.md) | Data structures, matching algorithm, lazy cancellation, invariants, complexity |

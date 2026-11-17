@@ -28,6 +28,7 @@
 #include "mds/common/affinity.hpp"
 #include "mds/common/cli.hpp"
 #include "mds/common/clock.hpp"
+#include "mds/common/json.hpp"
 #include "mds/feed/synthetic_feed.hpp"
 #include "mds/pipeline/mutex_queue.hpp"
 #include "mds/pipeline/pipeline.hpp"
@@ -143,6 +144,16 @@ int main(int argc, char** argv) try {
     const bool skip_raw = args.has("pipeline-only");
     const bool skip_pipeline = args.has("raw-only");
 
+    struct Row {
+        const char* layer;
+        std::string variant;
+        double rate;
+        double vs_mutex;
+        double p50_ns;
+        double p99_ns;
+    };
+    std::vector<Row> rows;
+
     std::printf("bench_queue: payload=%zu B capacity=%zu reps=%d (median) pin=%d,%d hw_threads=%u\n",
                 sizeof(Envelope), capacity, reps, pcpu, ccpu,
                 std::thread::hardware_concurrency());
@@ -167,6 +178,10 @@ int main(int argc, char** argv) try {
         std::printf("  %-28s %14.0f %9.2fx\n", "mutex   (pop batch 64)", mutex64, mutex64 / mutex1);
         std::printf("  %-28s %14.0f %9.2fx\n", "spsc    (pop 1)", spsc1, spsc1 / mutex1);
         std::printf("  %-28s %14.0f %9.2fx\n", "spsc    (pop batch 64)", spsc64, spsc64 / mutex1);
+        rows.push_back({"raw", "mutex pop 1", mutex1, 1.0, 0, 0});
+        rows.push_back({"raw", "mutex pop batch 64", mutex64, 1.0, 0, 0});
+        rows.push_back({"raw", "spsc pop 1", spsc1, spsc1 / mutex1, 0, 0});
+        rows.push_back({"raw", "spsc pop batch 64", spsc64, spsc64 / mutex64, 0, 0});
         std::printf("  like-for-like: spsc/mutex pop1 = %.2fx, batch64 = %.2fx\n", spsc1 / mutex1,
                     spsc64 / mutex64);
     }
@@ -193,7 +208,28 @@ int main(int argc, char** argv) try {
             std::printf("  spsc    (batch %-3zu)          %14.0f %10.0f %10.0f %9.2fx\n", batch,
                         s.events_per_sec, s.latency_ns.p50, s.latency_ns.p99,
                         s.events_per_sec / m.events_per_sec);
+            rows.push_back({"pipeline", "mutex batch " + std::to_string(batch), m.events_per_sec, 1.0,
+                            m.latency_ns.p50, m.latency_ns.p99});
+            rows.push_back({"pipeline", "spsc batch " + std::to_string(batch), s.events_per_sec,
+                            s.events_per_sec / m.events_per_sec, s.latency_ns.p50, s.latency_ns.p99});
         }
+    }
+
+    if (args.has("json")) {
+        JsonWriter j(args.str("json"));
+        j.begin_object();
+        j.kv("hw_threads", static_cast<std::uint64_t>(std::thread::hardware_concurrency()));
+        j.kv("reps", reps).kv("messages", static_cast<std::uint64_t>(messages));
+        j.kv("events", static_cast<std::uint64_t>(pipeline_events));
+        j.kv("payload_bytes", static_cast<std::uint64_t>(sizeof(Envelope)));
+        j.key("rows").begin_array();
+        for (const auto& r : rows) {
+            j.begin_object().kv("layer", r.layer).kv("variant", r.variant).kv("rate", r.rate, 1);
+            j.kv("vs_mutex", r.vs_mutex, 3).kv("p50_ns", r.p50_ns, 0).kv("p99_ns", r.p99_ns, 0);
+            j.end_object();
+        }
+        j.end_array();
+        j.end_object();
     }
     return 0;
 } catch (const std::exception& e) {

@@ -16,6 +16,7 @@
 
 #include "mds/common/cli.hpp"
 #include "mds/common/clock.hpp"
+#include "mds/common/json.hpp"
 #include "mds/common/stats.hpp"
 #include "mds/feed/synthetic_feed.hpp"
 #include "mds/orderbook/order_book.hpp"
@@ -70,12 +71,15 @@ int main(int argc, char** argv) try {
         const auto t1 = mono_ns();
         lat[static_cast<std::size_t>(e.type)].push_back(t1 - t0);
     }
+    const double median_rate = rates[rates.size() / 2];
+    std::vector<Percentiles> per_op;
     std::printf("\n[latency ns, includes timer overhead]\n");
     std::printf("  %-8s %10s %8s %8s %8s %8s %10s\n", "op", "samples", "mean", "p50", "p99",
                 "p99.9", "max");
     const char* names[] = {"add", "cancel", "modify", "market"};
     for (std::size_t i = 0; i < lat.size(); ++i) {
         const auto p = summarize(lat[i]);
+        per_op.push_back(p);
         std::printf("  %-8s %10zu %8.0f %8.0f %8.0f %8.0f %10.0f\n", names[i], p.samples, p.mean,
                     p.p50, p.p99, p.p999, p.max);
     }
@@ -84,6 +88,21 @@ int main(int argc, char** argv) try {
                 book.order_count(), book.level_count(Side::Buy), book.level_count(Side::Sell),
                 static_cast<unsigned long long>(st.compactions),
                 static_cast<unsigned long long>(st.rejects), book.validate() ? "yes" : "NO");
+    if (args.has("json")) {
+        JsonWriter j(args.str("json"));
+        j.begin_object();
+        j.kv("events", static_cast<std::uint64_t>(events.size()));
+        j.kv("events_per_sec", median_rate, 1);
+        j.key("ops").begin_array();
+        for (std::size_t k = 0; k < per_op.size(); ++k) {
+            j.begin_object().kv("op", names[k]).kv("samples", static_cast<std::uint64_t>(per_op[k].samples));
+            j.kv("mean_ns", per_op[k].mean, 1).kv("p50_ns", per_op[k].p50, 0);
+            j.kv("p99_ns", per_op[k].p99, 0).kv("p999_ns", per_op[k].p999, 0);
+            j.end_object();
+        }
+        j.end_array();
+        j.end_object();
+    }
     return 0;
 } catch (const std::exception& e) {
     std::fprintf(stderr, "bench_orderbook: %s\n", e.what());

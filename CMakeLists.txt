@@ -69,7 +69,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------------
-foreach(app mds_sim mds_backtest mds_query)
+foreach(app mds_sim mds_backtest mds_query mds_live)
   add_executable(${app} apps/${app}.cpp)
   target_link_libraries(${app} PRIVATE mds_core mds_options)
 endforeach()

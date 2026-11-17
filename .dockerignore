@@ -1,0 +1,11 @@
+.git
+.github
+build*
+out
+web/data
+**/__pycache__
+**/*.pyc
+*.bin
+*.csv
+.vscode
+.idea

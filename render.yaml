@@ -1,0 +1,17 @@
+# Render Blueprint: New > Blueprint > pick this repo.
+services:
+  - type: web
+    name: market-data-simulator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # a paid plan is needed for the persistent disk below
+    healthCheckPath: /api/health
+    envVars:
+      - key: MDS_API_TOKEN
+        generateValue: true  # visitors can watch; changes need this token
+      - key: MDS_MAX_EVENTS
+        value: "2000000"
+    disk:
+      name: mds-data
+      mountPath: /data
+      sizeGB: 1

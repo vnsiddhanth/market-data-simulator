@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Market Data Simulator</title>
+  <meta name="description" content="Real-time limit order book simulator with a lock-free C++ pipeline, live paper trading, backtesting and benchmarks.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/live" aria-label="Market Data Simulator home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor" opacity=".08"/><path d="M6 22l6-7 5 4 9-10" fill="none" stroke="#2463eb" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="26" cy="9" r="2.4" fill="#0f9d6b"/></svg>
+      <span>Market Data Simulator</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="#/live" data-route="live">Live market</a>
+      <a href="#/simulate" data-route="simulate">Simulate</a>
+      <a href="#/backtest" data-route="backtest">Backtest</a>
+      <a href="#/benchmarks" data-route="benchmarks">Benchmarks</a>
+      <a href="#/history" data-route="history">History</a>
+      <a href="#/about" data-route="about">About</a>
+    </nav>
+    <div class="topbar-right">
+      <span id="conn" class="pill"><span class="dot"></span><span>connecting</span></span>
+      <button class="btn icon" id="theme-btn" title="Toggle light/dark theme" aria-label="Toggle theme">◐</button>
+      <button class="btn icon" id="token-btn" title="Access token" aria-label="Access token">🔑</button>
+    </div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+  <footer>Market Data Simulator · C++17 engines · <a href="https://github.com/vnsiddhanth/market-data-simulator" target="_blank" rel="noopener">Source on GitHub</a></footer>
+  <div id="toasts" aria-live="polite"></div>
+
+  <dialog id="token-dialog">
+    <form method="dialog">
+      <h2>Access token</h2>
+      <p class="muted">This server requires a token to start runs or control the live market. Viewing is open to everyone. Ask the operator for the token; it is stored only in this browser.</p>
+      <div class="field"><label for="token-input">Token</label><input id="token-input" type="password" autocomplete="off"></div>
+      <div class="btn-row" id="token-actions">
+        <button class="btn primary" value="save">Save</button>
+        <button class="btn" value="clear">Clear</button>
+        <button class="btn" value="cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

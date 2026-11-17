@@ -53,6 +53,9 @@ struct BacktestConfig {
     Price tick_size{100};
     Timestamp equity_sample_interval_ns{kNanosPerSecond};
     std::size_t warmup_events{1000};  // build the book before the strategy trades
+    // false for long-running live sessions: fills go to a drainable buffer
+    // and no equity curve is accumulated, so memory stays bounded.
+    bool record_history{true};
 };
 
 struct BacktestResult {
@@ -77,9 +80,27 @@ class Backtester final : private StrategyContext {
 public:
     explicit Backtester(BacktestConfig cfg = {});
 
+    // Batch replay.
     BacktestResult run(const std::vector<MarketEvent>& events, Strategy& strategy);
 
+    // Incremental API (used by the real-time engine): begin(), then step() per
+    // event as it arrives, then finish(). `strategy` must outlive the session.
+    void begin(Strategy& strategy);
+    void step(const MarketEvent& ev);
+    BacktestResult finish();
+
     [[nodiscard]] const OrderBook& book() const noexcept { return book_; }
+    [[nodiscard]] const Portfolio& portfolio() const noexcept { return portfolio_; }
+    [[nodiscard]] bool trading() const noexcept { return trading_enabled_; }
+    [[nodiscard]] std::size_t working_orders() const noexcept { return open_.size(); }
+    [[nodiscard]] std::uint64_t orders_sent() const noexcept { return result_.orders_sent; }
+    [[nodiscard]] double mark() const noexcept;  // current mid (or last known)
+    // Market trades produced by the most recent step() (the replayed flow, not ours).
+    [[nodiscard]] const std::vector<Fill>& last_market_fills() const noexcept {
+        return scratch_fills_;
+    }
+    // Fills since the last call (only populated when record_history == false).
+    std::vector<ExecutionReport> drain_recent_fills();
 
 private:
     enum class OrderState : std::uint8_t { PendingNew, Working, Done };
@@ -129,6 +150,9 @@ private:
     double last_mid_{0.0};
     bool trading_enabled_{false};
     BacktestResult result_;
+    Strategy* strategy_{nullptr};
+    std::vector<ExecutionReport> recent_fills_;
+    std::int64_t wall_start_ns_{0};
 };
 
 }  // namespace mds

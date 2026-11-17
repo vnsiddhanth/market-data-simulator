@@ -81,3 +81,44 @@ jobs:
           ./build/mds_sim --events 50000 --queue spsc --redis 127.0.0.1:6399
           ./build/mds_query --redis 127.0.0.1:6399 --field mid --agg avg --bucket-ms 100
           ./build/mds_backtest --strategy mm --redis 127.0.0.1:6399
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - name: Build engines
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMDS_BUILD_TESTS=OFF && cmake --build build --parallel
+      - name: Backend API tests (real engines)
+        run: cd web && MDS_BIN_DIR=$GITHUB_WORKSPACE/build python -m unittest discover -s tests -v
+      - name: Frontend syntax check
+        run: node --check web/frontend/app.js && node --check web/frontend/charts.js
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t mds-web:ci .
+      - name: Run container and check the deployed app
+        run: |
+          docker run -d --name mds -p 8080:8080 -e MDS_API_TOKEN=ci-token mds-web:ci
+          for i in $(seq 1 30); do curl -fs localhost:8080/api/health && break; sleep 1; done
+          echo; curl -fs localhost:8080/ | grep -q "Market Data Simulator"
+          # live market streams ticks
+          timeout 5 curl -sN localhost:8080/api/live/stream | grep -m 3 "^event: tick"
+          # changes require the token
+          test "$(curl -s -o /dev/null -w '%{http_code}' -XPOST localhost:8080/api/live/stop)" = 401
+          # a small simulation runs inside the container
+          ID=$(curl -fs -XPOST -H 'Authorization: Bearer ci-token' -H 'Content-Type: application/json' \
+               -d '{"kind":"simulation","params":{"events":50000}}' localhost:8080/api/jobs | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+          for i in $(seq 1 60); do
+            S=$(curl -fs localhost:8080/api/jobs/$ID | python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])')
+            [ "$S" = succeeded ] && break; [ "$S" = failed ] && exit 1; sleep 1
+          done
+          test "$S" = succeeded
+          docker inspect --format '{{.State.Health.Status}}' mds
+      - name: Container logs
+        if: always()
+        run: docker logs mds || true

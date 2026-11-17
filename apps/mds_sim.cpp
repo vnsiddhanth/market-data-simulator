@@ -17,6 +17,7 @@
 
 #include "mds/common/cli.hpp"
 #include "mds/common/clock.hpp"
+#include "mds/common/json.hpp"
 #include "mds/feed/synthetic_feed.hpp"
 #include "mds/pipeline/mutex_queue.hpp"
 #include "mds/pipeline/pipeline.hpp"
@@ -44,7 +45,9 @@ void usage() {
         "  --redis HOST:PORT   persist to Redis\n"
         "  --symbol SYM        Redis symbol namespace (default SIM)\n"
         "  --purge             delete existing Redis data for the symbol first\n"
-        "  --zset              force the sorted-set fallback instead of RedisTimeSeries");
+        "  --zset              force the sorted-set fallback instead of RedisTimeSeries\n"
+        "  --vol V --informed F --impact I   synthetic market realism knobs\n"
+        "  --json PATH         write a machine-readable summary");
 }
 
 void print_result(const PipelineResult& r) {
@@ -116,6 +119,9 @@ int main(int argc, char** argv) try {
     SyntheticFeedConfig fc;
     fc.seed = static_cast<std::uint64_t>(args.i64("seed", 42));
     fc.events_per_second = args.f64("rate", fc.events_per_second);
+    fc.volatility_ticks_per_sqrt_sec = args.f64("vol", fc.volatility_ticks_per_sqrt_sec);
+    fc.informed_fraction = args.f64("informed", fc.informed_fraction);
+    fc.impact_ticks_per_lot = args.f64("impact", fc.impact_ticks_per_lot);
     fc.max_events = static_cast<std::uint64_t>(args.i64("events", 1'000'000));
 
     PipelineConfig pc;
@@ -146,13 +152,19 @@ int main(int argc, char** argv) try {
                 pc.consumer_batch, live ? "live-generate" : "replay");
     OrderBook final_book;
     double spsc_eps = 0, mutex_eps = 0;
+    struct RunSummary {
+        PipelineResult r;
+        bool consistent;
+    };
+    std::vector<RunSummary> runs;
     if (queue == "spsc" || queue == "both") {
         OrderBook book;
         const auto r = run_pipeline<SpscRing<Envelope>>(pc, events, live, fc, book);
         print_result(r);
         spsc_eps = r.events_per_sec;
-        std::printf("  %-14s consistency vs exchange book: %s\n", "",
-                    same_book(book, reference.exchange_book()) && book.validate() ? "OK" : "MISMATCH");
+        const bool ok = same_book(book, reference.exchange_book()) && book.validate();
+        std::printf("  %-14s consistency vs exchange book: %s\n", "", ok ? "OK" : "MISMATCH");
+        runs.push_back({r, ok});
         final_book = std::move(book);
     }
     if (queue == "mutex" || queue == "both") {
@@ -160,14 +172,56 @@ int main(int argc, char** argv) try {
         const auto r = run_pipeline<MutexQueue<Envelope>>(pc, events, live, fc, book);
         print_result(r);
         mutex_eps = r.events_per_sec;
-        std::printf("  %-14s consistency vs exchange book: %s\n", "",
-                    same_book(book, reference.exchange_book()) && book.validate() ? "OK" : "MISMATCH");
+        const bool ok = same_book(book, reference.exchange_book()) && book.validate();
+        std::printf("  %-14s consistency vs exchange book: %s\n", "", ok ? "OK" : "MISMATCH");
+        runs.push_back({r, ok});
         if (final_book.empty()) final_book = std::move(book);
     }
     if (spsc_eps > 0 && mutex_eps > 0) {
         std::printf("  speed-up (lock-free / mutex): %.2fx\n", spsc_eps / mutex_eps);
     }
     print_book(final_book, static_cast<std::size_t>(args.i64("depth", 5)));
+
+    if (args.has("json")) {
+        JsonWriter j(args.str("json"));
+        j.begin_object();
+        j.key("generate").begin_object();
+        j.kv("events", static_cast<std::uint64_t>(events.size()));
+        j.kv("seconds", gen_s, 4);
+        j.kv("sim_span_s", events.empty() ? 0.0
+                                           : static_cast<double>(events.back().ts - events.front().ts) / 1e9, 3);
+        j.kv("seed", static_cast<std::uint64_t>(fc.seed));
+        j.end_object();
+        j.key("pipelines").begin_array();
+        for (const auto& run : runs) {
+            const auto& r = run.r;
+            j.begin_object();
+            j.kv("queue", r.queue_name).kv("events_per_sec", r.events_per_sec, 1);
+            j.kv("seconds", r.seconds, 6).kv("fills", r.fills).kv("consistent", run.consistent);
+            j.kv("producer_stalls", r.producer_stalls).kv("consumer_idle", r.consumer_idle);
+            j.key("latency_ns").begin_object();
+            j.kv("p50", r.latency_ns.p50, 0).kv("p90", r.latency_ns.p90, 0);
+            j.kv("p99", r.latency_ns.p99, 0).kv("p999", r.latency_ns.p999, 0);
+            j.kv("max", r.latency_ns.max, 0);
+            j.end_object();
+            j.end_object();
+        }
+        j.end_array();
+        j.kv("speedup", (spsc_eps > 0 && mutex_eps > 0) ? spsc_eps / mutex_eps : 0.0, 3);
+        j.key("book").begin_object();
+        for (Side side : {Side::Buy, Side::Sell}) {
+            j.key(side == Side::Buy ? "bids" : "asks").begin_array();
+            for (const auto& l : final_book.depth(side, 20)) {
+                j.begin_array().value(to_double(l.price), 4).value(static_cast<std::int64_t>(l.qty));
+                j.value(static_cast<std::int64_t>(l.orders)).end_array();
+            }
+            j.end_array();
+        }
+        j.kv("orders", static_cast<std::uint64_t>(final_book.order_count()));
+        j.kv("imbalance", final_book.imbalance(5), 4);
+        j.end_object();
+        j.end_object();
+    }
 
     // ---- 4. persist ---------------------------------------------------------
     if (args.has("csv")) {

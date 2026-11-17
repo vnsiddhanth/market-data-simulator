@@ -1,0 +1,37 @@
+# Full stack: web app + Redis Stack (RedisTimeSeries).
+#   docker compose up -d --build      ->  http://localhost:8080
+#   MDS_API_TOKEN=change-me docker compose up -d --build   (require a token for changes)
+services:
+  web:
+    build: .
+    image: mds-web:latest
+    ports:
+      - "8080:8080"
+    environment:
+      MDS_REDIS: "redis:6379"
+      MDS_API_TOKEN: "${MDS_API_TOKEN:-}"
+      MDS_MAX_EVENTS: "${MDS_MAX_EVENTS:-3000000}"
+      MDS_LIVE_AUTOSTART: "1"
+    volumes:
+      - mds-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis/redis-stack-server:7.4.0-v1
+    environment:
+      REDIS_ARGS: "--appendonly yes --appendfsync everysec"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  mds-data:
+  redis-data:

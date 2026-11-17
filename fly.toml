@@ -1,0 +1,30 @@
+# Fly.io: fly launch --copy-config --no-deploy && fly volumes create mds_data --size 1 && fly deploy
+app = "market-data-simulator"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MDS_MAX_EVENTS = "2000000"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"   # keep the live market running
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "3s"
+
+[[mounts]]
+  source = "mds_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1gb"

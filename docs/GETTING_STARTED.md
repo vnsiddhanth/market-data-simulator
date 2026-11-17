@@ -10,7 +10,8 @@ what comes out**, and **exactly how to run it**, step by step, on Windows
 - [4. Inputs](#4-inputs)
 - [5. Outputs](#5-outputs)
 - [6. Install and build](#6-install-and-build)
-- [7. Run it: the one-command demo](#7-run-it-the-one-command-demo)
+- [7. Run it: the web app (easiest)](#7-run-it-the-web-app-easiest)
+- [7b. Run it: the one-command demo](#7b-run-it-the-one-command-demo)
 - [8. Run it: each tool on its own](#8-run-it-each-tool-on-its-own)
 - [9. Using a real Redis](#9-using-a-real-redis)
 - [10. Running the tests and benchmarks](#10-running-the-tests-and-benchmarks)
@@ -89,7 +90,9 @@ Programs you will run:
 | `mds_tests` | C++ | Unit, stress and property tests |
 | `fake_redis.py` | Python | A small Redis-compatible server so you don't need to install Redis |
 | `redis_inspect.py`, `verify_events.py`, `analyze_backtest.py`, `ingest_events.py` | Python | Inspect, verify, analyse and import data |
-| `demo.sh` | Bash | Runs everything above in order |
+| `mds_live` | C++ | Real-time engine: wall-clock-paced market + live paper trading, JSON snapshots |
+| `python3 -m mds_web` (in `web/`) | Python | The web app: live dashboard, runs, history, downloads |
+| `demo.sh` | Bash | Runs the command-line tools in order |
 
 ## 4. Inputs
 
@@ -341,7 +344,30 @@ ctest --test-dir build --output-on-failure
 
 You should see `100% tests passed, 0 tests failed out of 10`.
 
-## 7. Run it: the one-command demo
+## 7. Run it: the web app (easiest)
+
+```bash
+cd web && python3 -m mds_web
+```
+
+Open http://127.0.0.1:8080 (on WSL the same address works from your
+Windows browser). You get:
+
+- a **live market** streaming in real time, with a strategy paper-trading
+  against it;
+- forms to run **simulations**, **backtests** and **benchmarks**, with
+  presets and explanations for every setting;
+- a **history** of every run, with downloads.
+
+With Docker instead (no compiler needed):
+
+```bash
+docker build -t mds-web . && docker run --rm -p 8080:8080 mds-web
+```
+
+See [WEB_APP.md](WEB_APP.md) and [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## 7b. Run it: the one-command demo
 
 ```bash
 ./demo.sh

@@ -41,6 +41,7 @@ void Backtester::reset() {
     last_mid_ = 0.0;
     trading_enabled_ = false;
     result_ = BacktestResult{};
+    recent_fills_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +114,11 @@ void Backtester::fill(SimOrder& o, Price price, Qty qty, bool maker, Strategy& s
     rep.maker = maker;
     rep.fee = fee;
     rep.ts = now_;
-    result_.fills.push_back(rep);
+    if (cfg_.record_history) {
+        result_.fills.push_back(rep);
+    } else {
+        recent_fills_.push_back(rep);  // live mode: drained by the caller, bounded memory
+    }
     strategy.on_fill(*this, rep);  // may send / cancel; never mutates book_
 }
 
@@ -276,6 +281,7 @@ void Backtester::sweep_done() {
 
 void Backtester::sample_equity(Timestamp ts) {
     if (auto mid = book_.mid_price()) last_mid_ = *mid;
+    if (!cfg_.record_history) return;
     while (ts >= next_sample_ts_) {
         result_.equity_curve.push_back(
             EquityPoint{next_sample_ts_, portfolio_.equity(last_mid_), last_mid_,
@@ -284,49 +290,62 @@ void Backtester::sample_equity(Timestamp ts) {
     }
 }
 
-BacktestResult Backtester::run(const std::vector<MarketEvent>& events, Strategy& strategy) {
+void Backtester::begin(Strategy& strategy) {
     reset();
+    strategy_ = &strategy;
     result_.strategy = strategy.name();
-    result_.fills.reserve(4096);
-    if (events.empty()) return std::move(result_);
+    if (cfg_.record_history) result_.fills.reserve(4096);
+    wall_start_ns_ = mono_ns();
+}
 
-    const auto wall0 = mono_ns();
-    result_.sim_start = events.front().ts;
-    const std::size_t warmup = std::min(cfg_.warmup_events, events.size() - 1);
+void Backtester::step(const MarketEvent& ev) {
+    Strategy& strategy = *strategy_;
+    if (result_.events == 0) result_.sim_start = ev.ts;
+    now_ = ev.ts;
 
-    for (std::size_t i = 0; i < events.size(); ++i) {
-        const MarketEvent& ev = events[i];
-        now_ = ev.ts;
-
-        if (trading_enabled_) {
-            release_due_actions(strategy);
-            pre_event_queue_update(ev, strategy);
-        }
-
-        scratch_fills_.clear();
-        book_.apply(ev, scratch_fills_);
-
-        if (trading_enabled_) {
-            sweep_done();
-            strategy.on_market_data(*this, book_, ev);
-            sample_equity(ev.ts);
-        } else if (i >= warmup) {
-            trading_enabled_ = true;
-            next_sample_ts_ = ev.ts;
-            sample_equity(ev.ts);
-            strategy.on_start(*this);
-        }
+    if (trading_enabled_) {
+        release_due_actions(strategy);
+        pre_event_queue_update(ev, strategy);
     }
 
-    strategy.on_end(*this);
-    if (auto mid = book_.mid_price()) last_mid_ = *mid;
-    result_.sim_end = events.back().ts;
-    result_.equity_curve.push_back(EquityPoint{result_.sim_end, portfolio_.equity(last_mid_),
-                                               last_mid_, portfolio_.position()});
+    scratch_fills_.clear();
+    book_.apply(ev, scratch_fills_);
 
-    const auto wall1 = mono_ns();
-    result_.events = events.size();
-    result_.wall_seconds = static_cast<double>(wall1 - wall0) / 1e9;
+    if (trading_enabled_) {
+        sweep_done();
+        strategy.on_market_data(*this, book_, ev);
+        sample_equity(ev.ts);
+    } else if (result_.events >= cfg_.warmup_events) {
+        trading_enabled_ = true;
+        next_sample_ts_ = ev.ts;
+        sample_equity(ev.ts);
+        strategy.on_start(*this);
+    }
+    result_.sim_end = ev.ts;
+    ++result_.events;
+}
+
+double Backtester::mark() const noexcept {
+    if (auto mid = book_.mid_price()) return *mid;
+    return last_mid_;
+}
+
+std::vector<ExecutionReport> Backtester::drain_recent_fills() {
+    std::vector<ExecutionReport> out;
+    out.swap(recent_fills_);
+    return out;
+}
+
+BacktestResult Backtester::finish() {
+    if (strategy_ == nullptr) return std::move(result_);
+    strategy_->on_end(*this);
+    if (auto mid = book_.mid_price()) last_mid_ = *mid;
+    if (cfg_.record_history && result_.events > 0) {
+        result_.equity_curve.push_back(EquityPoint{result_.sim_end, portfolio_.equity(last_mid_),
+                                                   last_mid_, portfolio_.position()});
+    }
+
+    result_.wall_seconds = static_cast<double>(mono_ns() - wall_start_ns_) / 1e9;
     result_.events_per_sec =
         result_.wall_seconds > 0 ? static_cast<double>(result_.events) / result_.wall_seconds : 0;
 
@@ -340,7 +359,19 @@ BacktestResult Backtester::run(const std::vector<MarketEvent>& events, Strategy&
     m.volume = portfolio_.volume();
     m.max_abs_position = portfolio_.max_abs_position();
     m.pnl_per_share = m.volume ? m.total_pnl / static_cast<double>(m.volume) : 0.0;
+    strategy_ = nullptr;
     return std::move(result_);
+}
+
+BacktestResult Backtester::run(const std::vector<MarketEvent>& events, Strategy& strategy) {
+    begin(strategy);
+    if (events.empty()) return finish();
+    // Never let the warm-up swallow the whole data set.
+    const std::size_t saved_warmup = cfg_.warmup_events;
+    cfg_.warmup_events = std::min(cfg_.warmup_events, events.size() - 1);
+    for (const MarketEvent& ev : events) step(ev);
+    cfg_.warmup_events = saved_warmup;
+    return finish();
 }
 
 // ---------------------------------------------------------------------------
