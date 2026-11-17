@@ -53,6 +53,8 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(mds_core STATIC
     src/order_book.cpp
+    src/flat_order_book.cpp
+    src/itch.cpp
     src/synthetic_feed.cpp
     src/backtester.cpp
     src/metrics.cpp
@@ -69,7 +71,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------------
-foreach(app mds_sim mds_backtest mds_query mds_live)
+foreach(app mds_sim mds_backtest mds_query mds_live mds_itch mds_t2t mds_feed)
   add_executable(${app} apps/${app}.cpp)
   target_link_libraries(${app} PRIVATE mds_core mds_options)
 endforeach()
@@ -94,9 +96,12 @@ if(MDS_BUILD_TESTS)
       tests/test_order_book.cpp
       tests/test_pipeline.cpp
       tests/test_feed_storage.cpp
-      tests/test_backtest.cpp)
+      tests/test_backtest.cpp
+      tests/test_flat_book.cpp
+      tests/test_itch.cpp
+      tests/test_hft.cpp)
   target_link_libraries(mds_tests PRIVATE mds_core mds_options)
-  foreach(suite order_book spsc_ring mutex_queue pipeline feed resp tick_store portfolio metrics backtester)
+  foreach(suite order_book flat_book itch risk ouch flat_hash bits spsc_ring mutex_queue pipeline feed resp tick_store portfolio metrics backtester)
     add_test(NAME ${suite} COMMAND mds_tests ${suite}.)
   endforeach()
 endif()

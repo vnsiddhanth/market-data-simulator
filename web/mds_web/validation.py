@@ -52,12 +52,14 @@ def schemas(max_events: int, max_bench: int) -> Dict[str, Dict[str, tuple]]:
             "messages": (int, 5_000_000, 100_000, max_bench),
             "events": (int, 500_000, 10_000, max(10_000, min(max_events, 3_000_000))),
             "reps": (int, 3, 1, 7),
+            "hft": (bool, True),
         },
         "live": {
             "strategy": ("enum", "mm", ("mm", "obi", "none")),
             "speed": (float, 1.0, 0.1, 20.0),
             "snapshot_ms": (int, 250, 100, 2000),
             "latency_us": (float, 50.0, 0.0, 100_000.0),
+            "spin": (bool, False),
             **{**FEED, "rate": (float, 2000.0, 50, 20_000)},
         },
     }

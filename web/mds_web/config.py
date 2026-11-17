@@ -56,6 +56,8 @@ class Config:
 
     live_autostart: bool = field(default_factory=lambda: _env_bool("MDS_LIVE_AUTOSTART", True))
     live_max_clients: int = field(default_factory=lambda: _env_int("MDS_LIVE_MAX_CLIENTS", 200))
+    # "P,C" CPU ids for the live engine's producer/consumer in low-latency mode.
+    live_pin: Optional[str] = field(default_factory=lambda: os.environ.get("MDS_LIVE_PIN") or None)
 
     def binary(self, name: str) -> Path:
         p = self.bin_dir / name
@@ -64,5 +66,5 @@ class Config:
         return p
 
     def missing_binaries(self) -> list:
-        names = ("mds_sim", "mds_backtest", "mds_live", "bench_queue", "bench_orderbook")
+        names = ("mds_sim", "mds_backtest", "mds_live", "bench_queue", "bench_orderbook", "mds_t2t", "mds_feed", "mds_itch")
         return [n for n in names if not self.binary(n).exists()]

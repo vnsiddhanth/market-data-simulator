@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "mds/backtest/backtester.hpp"
+#include "mds/common/affinity.hpp"
 #include "mds/common/cli.hpp"
 #include "mds/common/clock.hpp"
 #include "mds/common/json.hpp"
@@ -68,7 +69,9 @@ void usage() {
         "  --vol V --informed F --impact I   market realism knobs\n"
         "  --latency-us U     strategy order latency (default 50)\n"
         "  --duration-s D     stop after D wall seconds (default 0 = run until signalled)\n"
-        "  --capacity C       SPSC ring capacity (default 4096)");
+        "  --capacity C       SPSC ring capacity (default 4096)\n"
+        "  --spin             low-latency mode: consumer busy-spins instead of sleeping when idle\n"
+        "  --pin P,C          pin producer / consumer threads to CPUs P and C");
 }
 
 struct TradePrint {
@@ -119,6 +122,16 @@ int main(int argc, char** argv) try {
     const auto levels = static_cast<std::size_t>(std::clamp<std::int64_t>(args.i64("levels", 10), 1, 50));
     const double duration_s = args.f64("duration-s", 0.0);
     const std::string strategy_name = args.str("strategy", "mm");
+    // Low-latency mode: never sleep on the consumer (lowest wake-up latency,
+    // costs a full core). Default sleeps when idle so a quiet market is cheap.
+    const bool spin = args.has("spin");
+    int pin_producer = -1, pin_consumer = -1;
+    if (args.has("pin")) {
+        const std::string pin = args.str("pin");
+        const auto comma = pin.find(',');
+        pin_producer = std::stoi(pin.substr(0, comma));
+        pin_consumer = comma == std::string::npos ? -1 : std::stoi(pin.substr(comma + 1));
+    }
 
     BacktestConfig bc;
     bc.order_latency_ns = bc.cancel_latency_ns =
@@ -145,11 +158,14 @@ int main(int argc, char** argv) try {
         .kv("impact", fc.impact_ticks_per_lot, 3)
         .kv("queue", SpscRing<Envelope>::name())
         .kv("capacity", static_cast<std::int64_t>(ring.capacity()))
+        .kv("spin", spin)
+        .kv("pinned", pin_consumer >= 0)
         .end_object();
     out.end_line();
 
     // ---- producer: wall-clock-paced exchange feed ---------------------------
     std::thread producer([&] {
+        pin_current_thread(pin_producer);
         SyntheticFeed feed(fc);
         Envelope env;
         const auto wall0 = std::chrono::steady_clock::now();
@@ -175,8 +191,10 @@ int main(int argc, char** argv) try {
     bt.begin(*strategy);
 
     std::vector<Envelope> batch(256);
-    std::vector<std::int64_t> latencies;
+    pin_current_thread(pin_consumer);
+    std::vector<std::int64_t> latencies, t2t;
     latencies.reserve(1 << 14);
+    t2t.reserve(1 << 12);
     std::vector<TradePrint> trades;
     std::vector<LevelView> bids, asks;
     std::uint64_t events_total = 0, events_window = 0, seq = 0, trades_total = 0;
@@ -192,7 +210,7 @@ int main(int argc, char** argv) try {
         if (n == 0) {
             // Paced input means long idle gaps: spin briefly for low latency,
             // then sleep so an idle market doesn't burn a whole core.
-            if (++idle_spins < 64) {
+            if (spin || ++idle_spins < 64) {
                 cpu_relax();
             } else {
                 std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -200,8 +218,12 @@ int main(int argc, char** argv) try {
         } else {
             idle_spins = 0;
             for (std::size_t i = 0; i < n; ++i) {
+                const std::uint64_t sent_before = bt.orders_sent();
                 bt.step(batch[i].event);
-                latencies.push_back(mono_ns() - batch[i].enqueue_ns);
+                const std::int64_t done = mono_ns();
+                latencies.push_back(done - batch[i].enqueue_ns);
+                // Tick-to-trade: this event made the strategy send an order.
+                if (bt.orders_sent() != sent_before) t2t.push_back(done - batch[i].enqueue_ns);
                 for (const Fill& f : bt.last_market_fills()) {
                     trades.push_back(TradePrint{f.ts, f.price, f.qty, f.aggressor});
                     volume_window += f.qty;
@@ -218,6 +240,7 @@ int main(int argc, char** argv) try {
         // ---- emit one snapshot ------------------------------------------------
         const double window_s = static_cast<double>(now - window_start) / 1e9;
         const Percentiles lat = summarize(latencies);
+        const Percentiles t2t_p = summarize(t2t);
         const OrderBook& book = bt.book();
         book.depth_into(Side::Buy, levels, bids);
         book.depth_into(Side::Sell, levels, asks);
@@ -267,6 +290,11 @@ int main(int argc, char** argv) try {
         out.kv("p50", lat.p50 / 1e3, 2).kv("p99", lat.p99 / 1e3, 2).kv("max", lat.max / 1e3, 2);
         out.kv("samples", static_cast<std::uint64_t>(lat.samples));
         out.end_object();
+        out.key("tick_to_trade_us").begin_object();
+        out.kv("p50", t2t_p.p50 / 1e3, 2).kv("p99", t2t_p.p99 / 1e3, 2).kv("max", t2t_p.max / 1e3, 2);
+        out.kv("samples", static_cast<std::uint64_t>(t2t_p.samples));
+        out.end_object();
+        out.kv("spin", spin);
         out.key("queue").begin_object();
         out.kv("depth", static_cast<std::uint64_t>(ring.size_approx()));
         out.kv("capacity", static_cast<std::uint64_t>(ring.capacity()));
@@ -302,6 +330,7 @@ int main(int argc, char** argv) try {
         out.end_line();
 
         latencies.clear();
+        t2t.clear();
         trades.clear();
         events_window = 0;
         volume_window = 0;

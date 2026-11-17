@@ -25,6 +25,7 @@ RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
  && ctest --test-dir build --output-on-failure \
  && mkdir -p /out \
  && cp build/mds_sim build/mds_backtest build/mds_query build/mds_live \
+       build/mds_itch build/mds_t2t build/mds_feed \
        build/bench_queue build/bench_orderbook /out/
 
 # -------------------------------------------------------------- runtime ----

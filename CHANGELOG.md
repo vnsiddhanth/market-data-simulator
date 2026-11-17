@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0 - HFT path
+
+- `FlatOrderBook`: flat price ladder, pre-allocated intrusive order pool, bitmap best-price search, open-addressing hash, automatic re-centring; 1.9x the std::map book, verified fill-for-fill.
+- Nasdaq TotalView-ITCH 5.0 parser/encoder, per-symbol book builder, synthetic exchange encoder, streaming file reader; `mds_itch` generates and replays ITCH (incl. real Nasdaq sample files).
+- `mds_t2t`: three-thread pinned busy-spin tick-to-trade pipeline (ITCH -> flat book -> signal -> pre-trade risk -> OUCH 4.2), RDTSC stage timing, scheduling-jitter detection.
+- Pre-trade `RiskGate` (size, notional, collar, position, open orders, token-bucket rate limit, kill switch) and OUCH 4.2 Enter/Cancel encoding.
+- MoldUDP64 publisher with re-request server and feed handler with gap detection, hold-back and recovery; `mds_feed` publish/subscribe/demo with simulated packet loss; wire-to-book latency.
+- `TscClock` (calibrated RDTSC); `bench_orderbook` compares both books with TSC timing.
+- `mds_live --spin/--pin` low-latency mode and live tick-to-trade; web app Low-latency toggle, tick-to-trade tile, HFT benchmark panels.
+
 ## 2.0.0
 
 - **Web app**: live market dashboard (order book ladder, price chart with strategy fills, trade tape, latency, live PnL), Simulate / Backtest / Benchmarks / History / About pages, presets and inline explanations, light/dark themes, mobile layout.

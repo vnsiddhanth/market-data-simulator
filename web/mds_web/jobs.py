@@ -13,6 +13,7 @@ import os
 import queue
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -34,10 +35,27 @@ DOWNLOADABLE = {
     "ticks.bin": "application/octet-stream",
     "bench_queue.json": "application/json",
     "bench_orderbook.json": "application/json",
+    "t2t.json": "application/json",
+    "feed.json": "application/json",
     "log.txt": "text/plain",
 }
 
 ACTIVE = ("queued", "running")
+
+
+def _free_udp_ports(n: int) -> List[int]:
+    """Ports for a self-contained UDP demo; bound briefly so they are free now."""
+    socks, ports = [], []
+    try:
+        for _ in range(n):
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sk.bind(("127.0.0.1", 0))
+            socks.append(sk)
+            ports.append(sk.getsockname()[1])
+    finally:
+        for sk in socks:
+            sk.close()
+    return ports
 
 
 class JobError(Exception):
@@ -388,12 +406,23 @@ class JobManager:
                              "--events", str(p["events"]), "--reps", str(p["reps"]), "--json", "bench_queue.json"])
             self._exec(job, [str(self.cfg.binary("bench_orderbook")), "--events", str(p["events"]),
                              "--reps", str(p["reps"]), "--json", "bench_orderbook.json"])
+            if p["hft"]:
+                # Tick-to-trade: feed -> book -> strategy -> risk -> OUCH gateway.
+                self._exec(job, [str(self.cfg.binary("mds_t2t")), "--events", str(min(p["events"], 1_000_000)),
+                                 "--rate", "200000", "--json", "t2t.json"])
+                # ITCH over MoldUDP64/UDP with 1% packet loss and gap recovery.
+                data_port, req_port = _free_udp_ports(2)
+                self._exec(job, [str(self.cfg.binary("mds_feed")), "--demo", "--events", str(min(p["events"], 500_000)),
+                                 "--rate", "300000", "--drop", "0.01", "--port", str(data_port),
+                                 "--request-port", str(req_port), "--json", "feed.json"])
         finally:
             if self._live_pause:
                 self._live_pause(False)
         q = json.loads((d / "bench_queue.json").read_text())
         ob = json.loads((d / "bench_orderbook.json").read_text())
+        t2t = json.loads((d / "t2t.json").read_text()) if (d / "t2t.json").exists() else None
+        feed = json.loads((d / "feed.json").read_text()) if (d / "feed.json").exists() else None
         raw1 = next((r for r in q["rows"] if r["variant"] == "spsc pop 1"), None)
-        return {"queue": q, "orderbook": ob,
+        return {"queue": q, "orderbook": ob, "t2t": t2t, "feed": feed,
                 "headline": f"{raw1['vs_mutex']:.1f}x raw lock-free speed-up" if raw1 else ""}
 

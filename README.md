@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vnsiddhanth/market-data-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/vnsiddhanth/market-data-simulator/actions/workflows/ci.yml)
 
-**C++17 · lock-free multi-threading · limit order book · event-driven backtesting · Redis time-series · Python tooling**
+**C++17 · HFT-style tick-to-trade path · Nasdaq ITCH 5.0 / OUCH 4.2 / MoldUDP64 · lock-free multi-threading · flat order book · backtesting · real-time web app**
 
 A self-contained market microstructure lab **with a real-time web app**. It
 generates realistic exchange order flow, moves it across threads through a
@@ -13,6 +13,21 @@ it all through an event-driven backtester whose fill model tracks FIFO queue
 position exactly.
 
 ![Live market dashboard](docs/images/live-market.jpg)
+
+## HFT path at a glance
+
+Built the way latency-critical trading systems are built, all measured on a
+laptop (i5-1235U, WSL2). Details and methodology: [docs/HFT.md](docs/HFT.md).
+
+| | Result |
+|---|---|
+| **Tick-to-trade**: ITCH packet in → book → signal → risk checks → OUCH order out, 3 pinned busy-spin threads | **~1 µs median** (decision + risk + encode: 45-80 ns) |
+| **Flat order book**: price-ladder array, intrusive pool, bitmap best-price, flat hash, zero hot-path allocation | **24 M events/s, 1.9× the std::map book**; cancel p50 31 ns |
+| **Nasdaq TotalView-ITCH 5.0** parser | **38 M msg/s (1.2 GB/s)** decode; 7.4 M msg/s with book building; replays real Nasdaq files |
+| **MoldUDP64 over UDP** with gap detection and re-request recovery | 2% packet loss → 9,633 gaps all recovered, book identical to the exchange's |
+| **Pre-trade risk gate** (SEC 15c3-5 style) | size, notional, price collar, position, open orders, rate limit, kill switch |
+| **Lock-free SPSC queue** vs mutex | 8-10× raw, 3.7-4.2× end to end |
+| **Live engine in low-latency mode** (web app) | 1.4 µs tick-to-trade, 0.8 µs thread hand-off |
 
 ## Try it in one command
 
@@ -186,14 +201,18 @@ Methodology and tuning knobs are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 ```
 include/mds/
   common/        types (fixed-point prices), MarketEvent (40-byte POD), clock, affinity, stats, CLI
-  orderbook/     OrderBook
+  orderbook/     OrderBook (std::map) and FlatOrderBook (HFT price ladder)
+  itch/          Nasdaq TotalView-ITCH 5.0 codec, book builder, synthetic exchange encoder
+  hft/           pre-trade RiskGate, OUCH 4.2 order entry
+  net/           MoldUDP64 publisher / feed handler with gap recovery
   pipeline/      SpscRing, MutexQueue, MarketDataPipeline<Queue>
   feed/          SyntheticFeed + CSV / binary persistence
   backtest/      Backtester, Strategy API, Portfolio, metrics
   strategies/    InventoryMarketMaker, ImbalanceTaker
   storage/       RESP codec, RedisClient, TickStore
 src/             implementations
-apps/            mds_sim, mds_backtest, mds_query, mds_live (real-time engine)
+apps/            mds_sim, mds_backtest, mds_query, mds_live (real-time engine),
+                 mds_t2t (tick-to-trade), mds_itch (ITCH tools), mds_feed (MoldUDP64 publisher/handler)
 bench/           bench_queue, bench_orderbook
 tests/           C++ unit / property / concurrency tests (self-contained framework)
 python/mds/      codec, resp, store, book, analysis
@@ -211,6 +230,7 @@ docker/          Redis Stack compose file, reproducible build image
 
 | Document | Contents |
 |---|---|
+| [HFT.md](docs/HFT.md) | Flat order book, ITCH 5.0, tick-to-trade, OUCH, risk gate, MoldUDP64, jitter, what is still not production HFT |
 | [WEB_APP.md](docs/WEB_APP.md) | The web app: pages, how the real-time stream works, REST/SSE API |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker, Compose with Redis, Render, Fly.io, VMs, configuration, security, operations |
 | [GETTING_STARTED.md](docs/GETTING_STARTED.md) | What the app is, inputs and outputs, step-by-step setup and usage, troubleshooting |

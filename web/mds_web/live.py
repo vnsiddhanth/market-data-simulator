@@ -92,6 +92,10 @@ class LiveManager:
                 "--informed", repr(p["informed"]), "--impact", repr(p["impact"]), "--levels", "12"]
         if p.get("seed") is not None:
             args += ["--seed", str(p["seed"])]
+        if p.get("spin"):
+            args.append("--spin")
+            if self.cfg.live_pin:
+                args += ["--pin", self.cfg.live_pin]
         try:
             self._proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                           text=True, bufsize=1)

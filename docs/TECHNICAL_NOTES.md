@@ -130,14 +130,17 @@ simulated nanoseconds and unrelated to wall time.
 
 ## Roadmap
 
-1. Flat-array price ladder variant of `OrderBook` behind the same interface,
-   with a benchmark comparing it to the map version.
-2. ITCH 5.0 / PCAP replay source for the pipeline.
-3. Multi-symbol sharding: N pipelines, one per core, symbol-hash routing.
-4. Huge-page backed ring and order pool; NUMA-aware placement.
-5. Market-impact model (e.g. square-root law) as an optional backtest mode.
-6. Parameter sweeps (latency, spread, skew) driven from Python, results in
-   Redis, plotted with `analyze_backtest.py`.
+Done since the first version (see [HFT.md](HFT.md)): flat price-ladder book,
+Nasdaq ITCH 5.0 codec and replay, tick-to-trade pipeline with OUCH and a
+pre-trade risk gate, MoldUDP64 feed with gap recovery, TSC timing, low-latency
+live mode.
+
+1. Kernel-bypass receive path (DPDK / ef_vi) behind the `UdpSocket` interface.
+2. SoupBinTCP session layer and an exchange simulator that acknowledges and
+   fills OUCH orders, closing the order-entry loop.
+3. Multi-symbol sharding: N tick-to-trade pipelines, one per core.
+4. Huge-page backed rings and order pool; NUMA-aware placement.
+5. Market-impact model (square-root law) as an optional backtest mode.
 
 ---
 

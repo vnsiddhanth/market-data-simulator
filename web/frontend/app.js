@@ -209,6 +209,8 @@ const LABELS = {
   reps: ["Repetitions", "Each configuration runs this many times; the median is reported."],
   speed: ["Speed", "Simulated seconds per real second. 1 = real time, 5 = five times faster."],
   snapshot_ms: ["Update interval (ms)", "How often the screen updates."],
+  spin: ["Low-latency mode", "Busy-spin the engine's consumer thread instead of sleeping when idle, as HFT systems do. Cuts thread hand-off latency from ~75 µs to ~1-2 µs at the cost of one fully busy CPU core."],
+  hft: ["HFT benchmarks", "Also measure tick-to-trade latency (market data in → risk-checked order out) and an ITCH-over-UDP feed with 1% packet loss and gap recovery."],
 };
 
 function numberField(name, schema, value, { span } = {}) {
@@ -391,7 +393,8 @@ function pageLive(view) {
     );
     const fields = h("div", { class: "fields" }, marketFields(schema, params),
       numberField("speed", schema, params.speed), numberField("latency_us", schema, params.latency_us),
-      numberField("snapshot_ms", schema, params.snapshot_ms), numberField("seed", schema, params.seed));
+      numberField("snapshot_ms", schema, params.snapshot_ms), numberField("seed", schema, params.seed),
+      boolField("spin", schema, params.spin));
     form.append(presetBar(MARKET_PRESETS, form), fields,
       h("div", { class: "btn-row" }, h("button", { class: "btn primary", type: "submit" }, "Apply & restart market")));
     view.append(h("div", { class: "card hidden", id: "live-settings" }, form));
@@ -440,6 +443,9 @@ function pageLive(view) {
       kpi("Spread", fmt.px(b.spread), { sub: `${fmt.int(b.orders)} resting orders` }),
       kpi("Events/s", fmt.int(t.events_per_sec), { sub: `${fmt.int(t.events)} total`, help: "Order book events processed per second right now." }),
       kpi("Hand-off latency", fmt.us(t.latency_us.p50), { sub: `p99 ${fmt.us(t.latency_us.p99)}`, help: "Time from the feed thread enqueuing an event to the book being updated on the other thread (median; p99 below)." }),
+      kpi("Tick-to-trade", t.tick_to_trade_us && t.tick_to_trade_us.samples ? fmt.us(t.tick_to_trade_us.p50) : "–",
+        { sub: t.tick_to_trade_us && t.tick_to_trade_us.samples ? `p99 ${fmt.us(t.tick_to_trade_us.p99)} · ${t.spin ? "busy-spin" : "power-saving"}` : (t.spin ? "busy-spin mode" : "power-saving mode"),
+          help: "Time from a market event entering the engine to the strategy's resulting order being sent, for events that triggered an order. Turn on Low-latency mode in Market settings to see the HFT-style number." }),
       kpi("Trades", fmt.int(t.trade_count), { sub: `${fmt.int(t.volume)} shares this tick` }),
       kpi("Imbalance", (b.imbalance >= 0 ? "+" : "") + b.imbalance.toFixed(2), { cls: fmt.sign(b.imbalance), help: "(bid size − ask size) / total over the top 5 levels. Positive = more buyers waiting." }),
       kpi("Queue depth", `${t.queue.depth}/${fmt.int(t.queue.capacity)}`, { sub: `${fmt.int(t.queue.producer_stalls)} stalls`, help: "Events waiting in the lock-free ring between the two threads." }),
@@ -745,10 +751,11 @@ async function pageBenchmarks(view, selected) {
   const form = h("form", { onsubmit: (e) => { e.preventDefault(); submit(); } });
   form.append(
     presetBar([
-      { name: "Quick (~15 s)", values: { messages: 2000000, events: 200000, reps: 3 } },
-      { name: "Standard (~1 min)", values: { messages: 10000000, events: 1000000, reps: 5 } },
+      { name: "Quick (~25 s)", values: { messages: 2000000, events: 200000, reps: 3 } },
+      { name: "Standard (~1.5 min)", values: { messages: 10000000, events: 1000000, reps: 5 } },
     ], form),
-    h("div", { class: "fields" }, numberField("messages", schema), numberField("events", schema), numberField("reps", schema)),
+    h("div", { class: "fields" }, numberField("messages", schema), numberField("events", schema), numberField("reps", schema),
+      boolField("hft", schema)),
     h("div", { class: "notice" }, "Results depend on the machine: shared cloud CPUs are noisier than a dedicated one. Each configuration is repeated and the median is shown."),
     h("div", { class: "btn-row" }, h("button", { class: "btn primary", type: "submit" }, "Run benchmark")));
   form.querySelector(".notice").style.margin = "10px 0";
@@ -803,13 +810,51 @@ function renderBenchmark(el, job) {
     h("div", { class: "grid cols-2" },
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Raw queue"), h("span", { class: "hint" }, "messages / second")), c1),
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Feed → queue → order book"), h("span", { class: "hint" }, "events / second")), c2)),
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Order book operation latency"), tip("Includes ~20-40 ns of timer overhead per measurement.")),
+    hftSection(job.result),
+    booksCard(ob),
+    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, `Order book operation latency (${ob.book || "map"} book)`), tip("Timed with the CPU time-stamp counter around each operation (a few ns of overhead).")),
       h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ["Operation", "Samples", "Mean", "p50", "p99", "p99.9"].map((c, i) => h("th", { class: i ? "num" : "" }, c)))),
         h("tbody", {}, ob.ops.map((o) => h("tr", {}, h("td", {}, o.op), h("td", { class: "num" }, fmt.int(o.samples)), ...["mean_ns", "p50_ns", "p99_ns", "p999_ns"].map((k) => h("td", { class: "num" }, fmt.ns(o[k]))))))))),
     h("div", { class: "card" }, downloads(job)));
   const bars = (rows) => rows.map((r) => ({ label: r.variant, value: r.rate, color: r.variant.startsWith("spsc") ? "--series-1" : "--series-3", note: r.variant.startsWith("spsc") ? `${r.vs_mutex.toFixed(2)}×` : "" }));
   addChart(new BarChart(c1)).setData(bars(raw), { format: (v) => fmtNum(v, 1) + "/s" });
   addChart(new BarChart(c2)).setData(bars(pipe), { format: (v) => fmtNum(v, 1) + "/s" });
+}
+
+function booksCard(ob) {
+  if (!ob.books || ob.books.length < 2) return null;
+  const c = h("canvas", { class: "chart short" });
+  const map = ob.books.find((b) => b.name === "map"), flat = ob.books.find((b) => b.name === "flat");
+  const ratio = (flat.events_per_sec / map.events_per_sec).toFixed(2);
+  const card = h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Order book: std::map vs flat ladder"),
+    tip("The original book (std::map price levels, std::deque queues, unordered_map) against the HFT-style book (flat price-ladder array, pre-allocated intrusive order pool, bitmap best-price search, open-addressing hash). Same events, identical fills.")),
+    c, h("p", { class: "muted" }, `The flat book is ${ratio}× faster on identical order flow.`));
+  addChart(new BarChart(c)).setData([
+    { label: "std::map book", value: map.events_per_sec, color: "--series-3" },
+    { label: "flat ladder book", value: flat.events_per_sec, color: "--series-1", note: `${ratio}×` },
+  ], { format: (v) => fmtNum(v, 1) + "/s" });
+  return card;
+}
+
+function hftSection(r) {
+  const t = r.t2t, f = r.feed;
+  if (!t && !f) return null;
+  const row = (name, p) => h("tr", {}, h("td", {}, name), ...["p50", "p90", "p99", "p999"].map((k) => h("td", { class: "num" }, fmt.ns(p[k]))));
+  return h("div", { class: "grid cols-2" },
+    t ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Tick-to-trade"),
+        tip("ITCH packet handed to the strategy core → decoded → flat book updated → signal → pre-trade risk checks → OUCH order encoded → sent by the gateway thread. Three busy-spinning threads, timed with the CPU time-stamp counter.")),
+      h("div", { class: "kpis" }, kpi("Median", fmt.ns(t.tick_to_trade_ns.p50), { cls: "pos" }), kpi("Orders", fmt.int(t.orders), { sub: `${fmt.int(t.packets)} packets` })),
+      h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ["Stage", "p50", "p90", "p99", "p99.9"].map((c, i) => h("th", { class: i ? "num" : "" }, c)))),
+        h("tbody", {}, row("tick-to-trade", t.tick_to_trade_ns), row("rx → book updated", t.rx_to_book_ns),
+          row("book → decision + risk + OUCH", t.book_to_signal_ns), row("decision → gateway tx", t.signal_to_tx_ns)))),
+      t.jitter_gaps ? h("div", { class: "notice warn" }, `The OS/VM took a core away ${fmt.int(t.jitter_gaps)} times (${t.jitter_ms.toFixed(1)} ms in total, worst ${t.jitter_max_ms.toFixed(1)} ms) during the run; that, not the code, drives the tail percentiles. Isolated cores remove it.`) : null) : null,
+    f ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "ITCH over UDP, 1% packet loss"),
+        tip("Nasdaq ITCH 5.0 messages in MoldUDP64 packets over UDP, with 1% of packets deliberately dropped. The feed handler detects each gap, holds later messages back, requests retransmission and rebuilds the book.")),
+      h("div", { class: "kpis" },
+        kpi("Gaps recovered", fmt.int(f.gaps), { sub: `${fmt.int(f.recovered)} messages re-sent` }),
+        kpi("Book after recovery", f.book_match ? "identical" : "MISMATCH", { cls: f.book_match ? "pos" : "neg" }),
+        kpi("Wire-to-book p50", fmt.ns(f.wire_to_book_ns.p50), { sub: `${fmt.int(f.messages)} messages` })),
+      h("p", { class: "muted" }, "Latency rises during loss because later messages correctly wait behind each gap until it is filled (head-of-line blocking).")) : null);
 }
 
 // =============================================================================

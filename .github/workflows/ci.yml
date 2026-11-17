@@ -38,6 +38,10 @@ jobs:
           $BIN/mds_sim --events 200000 --queue both
           $BIN/mds_backtest --strategy mm --events 200000
           $BIN/bench_queue --messages 2000000 --events 200000 --reps 3
+          $BIN/bench_orderbook --events 200000 --reps 2
+          $BIN/mds_itch --generate sim.itch --events 200000 && $BIN/mds_itch --replay sim.itch --top 3
+          $BIN/mds_t2t --events 200000 --rate 100000
+          $BIN/mds_feed --demo --events 100000 --rate 100000 --drop 0.01 --port 31101 --request-port 31102
 
   redis-integration:
     runs-on: ubuntu-24.04

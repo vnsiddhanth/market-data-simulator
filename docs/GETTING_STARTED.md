@@ -90,6 +90,9 @@ Programs you will run:
 | `mds_tests` | C++ | Unit, stress and property tests |
 | `fake_redis.py` | Python | A small Redis-compatible server so you don't need to install Redis |
 | `redis_inspect.py`, `verify_events.py`, `analyze_backtest.py`, `ingest_events.py` | Python | Inspect, verify, analyse and import data |
+| `mds_t2t` | C++ | Tick-to-trade benchmark: ITCH in → flat book → strategy → risk → OUCH order out |
+| `mds_itch` | C++ | Generate synthetic Nasdaq ITCH 5.0 files; replay real Nasdaq ITCH files |
+| `mds_feed` | C++ | ITCH over MoldUDP64/UDP: exchange publisher and feed handler with gap recovery |
 | `mds_live` | C++ | Real-time engine: wall-clock-paced market + live paper trading, JSON snapshots |
 | `python3 -m mds_web` (in `web/`) | Python | The web app: live dashboard, runs, history, downloads |
 | `demo.sh` | Bash | Runs the command-line tools in order |
