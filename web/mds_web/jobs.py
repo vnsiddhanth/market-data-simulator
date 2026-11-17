@@ -75,6 +75,8 @@ class JobManager:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._live_pause = live_pause
         self._stopping = False
+        self._executing: set = set()       # job ids a worker currently owns
+        self._delete_after: set = set()    # deleted while executing: worker cleans up
         self._load()
         self._workers = [threading.Thread(target=self._worker, name=f"job-worker-{i}", daemon=True)
                          for i in range(max(1, cfg.workers))]
@@ -207,6 +209,11 @@ class JobManager:
                 self._save(job)
                 return True
             del self._jobs[job_id]
+            if job_id in self._executing:
+                # Its worker is still wrapping up (e.g. right after a cancel):
+                # let the worker remove the folder when it is done with it.
+                self._delete_after.add(job_id)
+                return True
         shutil.rmtree(self.jobs_dir / job_id, ignore_errors=True)
         return True
 
@@ -225,7 +232,8 @@ class JobManager:
                 p.kill()
 
     def _prune(self) -> None:
-        done = sorted((j for j in self._jobs.values() if j["status"] not in ACTIVE),
+        done = sorted((j for j in self._jobs.values()
+                       if j["status"] not in ACTIVE and j["id"] not in self._executing),
                       key=lambda j: j["created_at"])
         for job in done[: max(0, len(done) - self.cfg.keep_jobs)]:
             del self._jobs[job["id"]]
@@ -235,29 +243,44 @@ class JobManager:
     def _worker(self) -> None:
         while not self._stopping:
             job_id = self._queue.get()
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if not job or job["status"] != "queued":
-                    continue
-                job["status"] = "running"
-                job["started_at"] = _now()
-                self._save(job)
             try:
-                result = getattr(self, f"_run_{job['kind']}")(job)
-                with self._lock:
-                    if job["status"] == "running":
-                        job["status"] = "succeeded"
-                        job["result"] = result
-            except Exception as e:  # noqa: BLE001 - report any failure to the user
-                with self._lock:
-                    if job["status"] == "running":
-                        job["status"] = "failed"
-                        job["error"] = str(e)[:2000]
-            finally:
-                with self._lock:
-                    self._procs.pop(job_id, None)
-                    job["finished_at"] = _now()
-                    self._save(job)
+                self._process(job_id)
+            except Exception as e:  # noqa: BLE001 - a worker must never die
+                print(f"job worker: unexpected error on {job_id}: {e}", file=sys.stderr, flush=True)
+
+    def _process(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job["status"] != "queued":
+                return
+            job["status"] = "running"
+            job["started_at"] = _now()
+            self._executing.add(job_id)
+            self._save(job)
+        try:
+            result = getattr(self, f"_run_{job['kind']}")(job)
+            with self._lock:
+                if job["status"] == "running":
+                    job["status"] = "succeeded"
+                    job["result"] = result
+        except Exception as e:  # noqa: BLE001 - report any failure to the user
+            with self._lock:
+                if job["status"] == "running":
+                    job["status"] = "failed"
+                    job["error"] = str(e)[:2000]
+        finally:
+            with self._lock:
+                self._procs.pop(job_id, None)
+                self._executing.discard(job_id)
+                job["finished_at"] = _now()
+                if job_id in self._delete_after:
+                    self._delete_after.discard(job_id)
+                    shutil.rmtree(self.jobs_dir / job_id, ignore_errors=True)
+                else:
+                    try:
+                        self._save(job)
+                    except OSError as e:
+                        print(f"job {job_id}: could not save state: {e}", file=sys.stderr, flush=True)
 
     def _exec(self, job: Dict[str, Any], args: List[str]) -> str:
         d = self.jobs_dir / job["id"]

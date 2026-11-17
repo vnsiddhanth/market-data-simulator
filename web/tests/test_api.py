@@ -204,6 +204,17 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.s.json("DELETE", f"/api/jobs/{job['id']}")[0], 200)
         self.assertEqual(self.s.json("GET", f"/api/jobs/{job['id']}")[0], 404)
 
+    def test_delete_right_after_cancel_keeps_workers_alive(self):
+        # Regression: deleting a cancelled job while its worker was still
+        # finishing used to crash the worker, stalling every later job.
+        for _ in range(3):
+            _, job = self.s.json("POST", "/api/jobs", {"kind": "simulation", "params": {"events": 3_000_000}})
+            time.sleep(0.2)
+            self.s.json("DELETE", f"/api/jobs/{job['id']}")   # cancel
+            self.s.json("DELETE", f"/api/jobs/{job['id']}")   # delete immediately
+        _, nxt = self.s.json("POST", "/api/jobs", {"kind": "simulation", "params": {"events": 20_000}})
+        self.assertEqual(self.s.wait_job(nxt["id"], timeout=60)["status"], "succeeded")
+
     def test_live_stream_delivers_ticks(self):
         status, st = self.s.json("POST", "/api/live/start", {"params": {"snapshot_ms": 100, "strategy": "mm"}})
         self.assertEqual(status, 200)
