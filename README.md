@@ -1,5 +1,7 @@
 # Market Data Simulator
 
+[![CI](https://github.com/vnsiddhanth/market-data-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/vnsiddhanth/market-data-simulator/actions/workflows/ci.yml)
+
 **C++17 · lock-free multi-threading · limit order book · event-driven backtesting · Redis time-series · Python tooling**
 
 A self-contained market microstructure lab. It generates realistic exchange
