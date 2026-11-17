@@ -14,11 +14,11 @@ jobs:
           - { os: ubuntu-24.04, cxx: clang++, sanitize: "" }
           - { os: ubuntu-24.04, cxx: clang++, sanitize: "address" }
           - { os: ubuntu-24.04, cxx: clang++, sanitize: "thread" }
-          - { os: macos-14,     cxx: clang++, sanitize: "" }
+          - { os: macos-latest,     cxx: clang++, sanitize: "" }
           - { os: windows-2022, cxx: "",      sanitize: "" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         shell: bash
         run: |
@@ -49,7 +49,7 @@ jobs:
         image: redis:7.4-alpine
         ports: ["6380:6379"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
       - name: RedisTimeSeries path
         run: |
@@ -69,8 +69,8 @@ jobs:
   python:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: cd python && python -m unittest discover -s tests -v
       - name: End-to-end against the in-repo fake Redis (no server needed)
